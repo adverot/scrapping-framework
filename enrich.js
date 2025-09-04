@@ -1,52 +1,108 @@
 import fetch from 'node-fetch';
 import puppeteer from 'puppeteer';
-import { getStep, setStep } from './utils.js';
+import chalk from 'chalk';
+import fs from 'fs';
+import { getStep, setStep, delay } from './utils.js';
+import constants from './constants.js';
 
 /**
  * Étape 3a : Enrichit les données avec l'API SIRENE.
  * @param {string} sourceName - Le nom de la source.
  */
 async function enrichWithSirene(sourceName) {
-    console.log("\n--- DÉBUT ÉTAPE 3a: Enrichissement via API SIRENE ---");
-    const detailsData = getStep(sourceName, "details");
-    const sireneData = getStep(sourceName, "sirene");
+    let logsPath = `./data/${sourceName}-logs.txt`;
+    console.log(chalk.blue("\n--- DÉBUT ÉTAPE 3a: Enrichissement via API SIRENE ---"));
 
-    const doneNames = new Set(sireneData.map(item => item.nom));
-    console.log(`-> Reprise de l'enrichissement SIRENE. ${doneNames.size}/${detailsData.length} entreprises déjà traitées.`);
+    const companiesToEnrich = getStep(sourceName, "details");
+    const enrichedCompanies = getStep(sourceName, "enriched");
 
-    for (const company of detailsData) {
+    const doneNames = new Set(enrichedCompanies.map(item => item.nom));
+    const progressBar = new cliProgress.SingleBar(
+        { format: '{bar} {percentage}% | {value}/{total} | {payload}' },
+        cliProgress.Presets.shades_classic);
+    progressBar.start(companiesToEnrich.length, doneNames.size);
+
+    let companyIdCounter = enrichedCompanies.length;
+    let dirigeantsIdCounter = enrichedCompanies.reduce((acc, company) => acc + (company.dirigeants?.length || 0), 0);
+    ;
+
+    for (const company of companiesToEnrich) {
         if (doneNames.has(company.nom)) {
             continue;
         }
 
         try {
             if (!company.codePostal) {
-                console.log(`[${sireneData.length}/${detailsData.length}] 🟡 ${company.nom} - Ignorée (pas de code postal)`);
+                progressBar.increment(1, { payload: chalk.yellow(`${company.nom} - Ignorée (pas de CP)`) });
                 continue;
             }
 
-            const response = await fetch(`https://recherche-entreprises.api.gouv.fr/search?q=${encodeURIComponent(company.nom)}&code_postal=${company.codePostal}&per_page=1`);
-            const apiResult = await response.json();
+            const response = await fetch(`https://recherche-entreprises.api.gouv.fr/search?q=${encodeURIComponent(company.nom)}&etat_administratif=A&code_postal=${company.codePostal}&ca_min=10000000&ca_max=300000000`, {
+                method: 'GET',
+                headers: { "Accept": "application/json" }
+            });
 
-            let enrichedData = { ...company, sirene_found: false };
-            if (apiResult.results && apiResult.results.length > 0) {
-                const sireneInfo = apiResult.results[0];
-                enrichedData = {
-                    ...company,
-                    sirene_found: true,
-                    siren: sireneInfo.siren,
-                    sirene_nom_complet: sireneInfo.nom_complet,
-                    sirene_adresse: sireneInfo.siege.adresse,
-                };
+            if (!response.ok) {
+                throw new Error(`API error: ${response.status} ${response.statusText}`);
             }
 
-            sireneData.push(enrichedData);
-            setStep(sourceName, "sirene", sireneData);
-            const status = enrichedData.sirene_found ? '✅' : '🟡';
-            console.log(`[${sireneData.length}/${detailsData.length}] ${status} ${company.nom}`);
+            const rawData = await response.json();
+            const data = rawData.results.filter(d => d.nom_complet.includes(company.nom) || d.nom_raison_sociale.includes(company.nom));
 
+            if (!data || data.length === 0) {
+                progressBar.increment(1, { payload: chalk.yellow(`${company.nom} - Aucune entreprise trouvée`) });
+                continue;
+            }
+
+            for (let d of data) {
+                const uniqueID = "ENT-" + String(++companyIdCounter).padStart(5, '0');
+                const [departement, region] = await Promise.all([
+                    fetch(`https://geo.api.gouv.fr/departements/${d.siege.departement}`).then(d => d.json()).catch(() => ({ code: "", nom: "" })),
+                    fetch(`https://geo.api.gouv.fr/regions/${d.siege.region}`).then(r => r.json()).catch(() => ({ nom: "" }))
+                ]);
+                const finalCompany = {};
+                finalCompany.id = uniqueID;
+                for (const [key, value] of Object.entries(company)) {
+                    let finalValue = value;
+                    if (key === 'website') {
+                        finalValue = (new URL(value.includes('://') ? value : `https://${value}`)).origin + '/';
+                    }
+                    finalCompany[`scrap_${key}`] = finalValue;
+                }
+                finalCompany.sirene_siren = d.siren;
+                finalCompany.sirene_adresse = d.siege.adresse;
+                finalCompany.sirene_ville = d.siege.libelle_commune;
+                finalCompany.siren_departement_code = departement.code;
+                finalCompany.sirene_departement = departement.nom;
+                finalCompany.sirene_region = region.nom;
+                finalCompany.sirene_activite = constants.DIVISION_ACTIVITE_PRINCIPALE[d.activite_principale?.split('.')[0]] ?? "";
+                finalCompany.sirene_ca = latestYear ? d.finances[latestYear]?.ca ?? "" : "";
+                finalCompany.sirene_annee_ca = latestYear ?? "";
+                finalCompany.sirene_effectifs = constants.TRANCHES_EFFECTIFS[d.tranche_effectif_salarie] ?? "";
+                finalCompany.sirene_annee_effectifs = d.annee_tranche_effectif_salarie ?? "";
+                finalCompany.domain = finalCompany.scrap_website?.replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0] ?? null;
+                if (!finalCompany.scrap_website || !finalCompany.scrap_nom || !finalCompany.scrap_codePostal) continue;
+                finalCompany.dirigeants = (d.dirigeants ?? [])
+                    .filter(d => d.type_dirigeant === 'personne physique')
+                    .filter(d => !ROLES_A_EXCLURE.includes(d.qualite))
+                    .map(d => ({
+                        id: "PER-" + String(++dirigeantsIdCounter).padStart(5, '0'),
+                        prenom: d.prenoms,
+                        nom: d.nom,
+                        fonction: d.qualite ?? '',
+                        entreprise: companySource.nom,
+                        idEntreprise: uniqueId
+                    }))
+                enrichedCompanies.push(finalCompany);
+            }
+
+            setStep(sourceName, "enriched", enrichedCompanies);
+            progressBar.increment(1, { payload: chalk.green(`${company.nom}`) });
         } catch (error) {
-            console.log(`[${sireneData.length}/${detailsData.length}] ❌ ${company.nom} - Erreur API: ${error.message}`);
+            fs.writeFileSync(logsPath, `\n${sireneData.length}/${detailsData.length}] ❌ ${company.nom} - Erreur API: ${error.message}`, { encoding: 'utf-8', flag: 'a' });
+            progressBar.increment(1, { payload: chalk.red(`${company.nom} - Erreur SIRENE`) });
+        } finally {
+            await delay(250);
         }
     }
     console.log("✅ Étape 3a terminée. L'enrichissement SIRENE est complet.");
@@ -58,18 +114,34 @@ async function enrichWithSirene(sourceName) {
  */
 async function enrichWithLinkedIn(sourceName) {
     console.log("\n--- DÉBUT ÉTAPE 3b: Recherche des URLs LinkedIn ---");
-    const sireneData = getStep(sourceName, "sirene");
+    const enrichedData = getStep(sourceName, "enriched");
     const finalData = getStep(sourceName, "final");
 
     const doneNames = new Set(finalData.map(item => item.nom));
-    console.log(`-> Reprise de la recherche LinkedIn. ${doneNames.size}/${sireneData.length} entreprises déjà traitées.`);
+    const progressBar = new cliProgress.SingleBar(
+        { format: '{bar} {percentage}% | {value}/{total} | {payload}' },
+        cliProgress.Presets.shades_classic);
+    progressBar.start(enrichedData.length, doneNames.size);
 
     const browser = await puppeteer.launch({ headless: 'new' });
     const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 800 });
+    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    await page.setExtraHTTPHeaders({
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0'
+    });
 
     try {
-        for (const company of sireneData) {
+        for (const company of enrichedData) {
             if (doneNames.has(company.nom)) {
                 continue;
             }
@@ -78,8 +150,8 @@ async function enrichWithLinkedIn(sourceName) {
             try {
                 if (company.website) {
                     await page.goto(company.website, { waitUntil: 'domcontentloaded', timeout: 20000 });
-                    const linkedinHandle = await page.waitForSelector('a[href*="linkedin.com/company/"]', { timeout: 3000 }).catch(() => null);
-                    if(linkedinHandle) {
+                    const linkedinHandle = await page.waitForSelector('a[href*="linkedin.com/company/"]', { timeout: 5000 }).catch(() => null);
+                    if (linkedinHandle) {
                         linkedinUrl = await page.evaluate(a => a.href, linkedinHandle);
                     }
                 }
@@ -87,11 +159,9 @@ async function enrichWithLinkedIn(sourceName) {
                 const finalCompany = { ...company, linkedinUrl };
                 finalData.push(finalCompany);
                 setStep(sourceName, "final", finalData);
-                const status = linkedinUrl ? '✅' : '🟡';
-                console.log(`[${finalData.length}/${sireneData.length}] ${status} ${company.nom}`);
-
+                progressBar.increment(1, { payload: chalk.blue(`${company.nom}`) });
             } catch (error) {
-                console.log(`[${finalData.length}/${sireneData.length}] ❌ ${company.nom} - Erreur Puppeteer: ${error.message}`);
+                progressBar.increment(1, { payload: chalk.red(`${company.nom} - LinkedIn Erreur`) });
                 // On sauvegarde quand même l'échec pour ne pas réessayer
                 const finalCompany = { ...company, linkedinUrl: 'ERREUR' };
                 finalData.push(finalCompany);
