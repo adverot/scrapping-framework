@@ -40,7 +40,7 @@ async function runGetDetailsStep(sourceName, scraper) {
     console.log(`-> Reprise du scraping. ${doneLinks.size}/${urlsToScrape.length} entreprises déjà traitées.`);
 
     const progressBar = new cliProgress.SingleBar({
-        format: '[{bar}] {percentage}% | {value}/{total} | {payload}'
+        format: '{bar} {percentage}% | {value}/{total} | {payload}'
     }, cliProgress.Presets.shades_classic);
 
     progressBar.start(urlsToScrape.length, doneLinks.size);
