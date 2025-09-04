@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import puppeteer from 'puppeteer';
+import cliProgress from 'cli-progress';
 import chalk from 'chalk';
 import fs from 'fs';
 import { getStep, setStep, delay } from './utils.js';
@@ -17,6 +18,8 @@ async function enrichWithSirene(sourceName) {
     const enrichedCompanies = getStep(sourceName, "enriched");
 
     const doneNames = new Set(enrichedCompanies.map(item => item.nom));
+    let successCount = enrichedCompanies.length;
+
     const progressBar = new cliProgress.SingleBar(
         { format: '{bar} {percentage}% | {value}/{total} | {payload}' },
         cliProgress.Presets.shades_classic);
@@ -33,7 +36,8 @@ async function enrichWithSirene(sourceName) {
 
         try {
             if (!company.codePostal) {
-                progressBar.increment(1, { payload: chalk.yellow(`${company.nom} - Ignorée (pas de CP)`) });
+                const payloadString = `Trouvées: ${chalk.green(successCount)} | ${chalk.yellow(`${company.nom} - Ignorée (pas de CP)`)}`;
+                progressBar.increment(1, { payload: payloadString });
                 continue;
             }
 
@@ -50,7 +54,8 @@ async function enrichWithSirene(sourceName) {
             const data = rawData.results.filter(d => d.nom_complet.includes(company.nom) || d.nom_raison_sociale.includes(company.nom));
 
             if (!data || data.length === 0) {
-                progressBar.increment(1, { payload: chalk.yellow(`${company.nom} - Aucune entreprise trouvée`) });
+                const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.yellow(`${company.nom} - Aucune entreprise trouvée`)}`;
+                progressBar.increment(1, { payload: payloadString });
                 continue;
             }
 
@@ -69,6 +74,9 @@ async function enrichWithSirene(sourceName) {
                     }
                     finalCompany[`scrap_${key}`] = finalValue;
                 }
+
+                const latestYear = d.finances ? Math.max(...Object.keys(d.finances).map(Number)) : null;
+
                 finalCompany.sirene_siren = d.siren;
                 finalCompany.sirene_adresse = d.siege.adresse;
                 finalCompany.sirene_ville = d.siege.libelle_commune;
@@ -84,23 +92,26 @@ async function enrichWithSirene(sourceName) {
                 if (!finalCompany.scrap_website || !finalCompany.scrap_nom || !finalCompany.scrap_codePostal) continue;
                 finalCompany.dirigeants = (d.dirigeants ?? [])
                     .filter(d => d.type_dirigeant === 'personne physique')
-                    .filter(d => !ROLES_A_EXCLURE.includes(d.qualite))
+                    .filter(d => !constants.ROLES_A_EXCLURE.includes(d.qualite))
                     .map(d => ({
                         id: "PER-" + String(++dirigeantsIdCounter).padStart(5, '0'),
                         prenom: d.prenoms,
                         nom: d.nom,
                         fonction: d.qualite ?? '',
-                        entreprise: companySource.nom,
-                        idEntreprise: uniqueId
+                        entreprise: company.nom,
+                        idEntreprise: uniqueID
                     }))
                 enrichedCompanies.push(finalCompany);
             }
 
             setStep(sourceName, "enriched", enrichedCompanies);
-            progressBar.increment(1, { payload: chalk.green(`${company.nom}`) });
+            successCount++;
+            const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.green(company.nom)}`;
+            progressBar.increment(1, { payload: payloadString });
         } catch (error) {
-            fs.writeFileSync(logsPath, `\n${sireneData.length}/${detailsData.length}] ❌ ${company.nom} - Erreur API: ${error.message}`, { encoding: 'utf-8', flag: 'a' });
-            progressBar.increment(1, { payload: chalk.red(`${company.nom} - Erreur SIRENE`) });
+            fs.writeFileSync(logsPath, `\n${enrichedCompanies.length}/${companiesToEnrich.length}] ❌ ${company.nom} - Erreur API: ${error.message}`, { encoding: 'utf-8', flag: 'a' });
+            const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.red(`${company.nom} - Erreur SIRENE`)}`;
+            progressBar.increment(1, { payload: payloadString });
         } finally {
             await delay(250);
         }
@@ -116,8 +127,9 @@ async function enrichWithLinkedIn(sourceName) {
     console.log("\n--- DÉBUT ÉTAPE 3b: Recherche des URLs LinkedIn ---");
     const enrichedData = getStep(sourceName, "enriched");
     const finalData = getStep(sourceName, "final");
+    let successCount = finalData.length;
 
-    const doneNames = new Set(finalData.map(item => item.nom));
+    const doneNames = new Set(finalData.map(item => item.scrap_nom));
     const progressBar = new cliProgress.SingleBar(
         { format: '{bar} {percentage}% | {value}/{total} | {payload}' },
         cliProgress.Presets.shades_classic);
@@ -142,7 +154,7 @@ async function enrichWithLinkedIn(sourceName) {
 
     try {
         for (const company of enrichedData) {
-            if (doneNames.has(company.nom)) {
+            if (doneNames.has(company.scrap_nom)) {
                 continue;
             }
 
@@ -153,15 +165,18 @@ async function enrichWithLinkedIn(sourceName) {
                     const linkedinHandle = await page.waitForSelector('a[href*="linkedin.com/company/"]', { timeout: 5000 }).catch(() => null);
                     if (linkedinHandle) {
                         linkedinUrl = await page.evaluate(a => a.href, linkedinHandle);
+                        successCount++;
                     }
                 }
 
                 const finalCompany = { ...company, linkedinUrl };
                 finalData.push(finalCompany);
                 setStep(sourceName, "final", finalData);
-                progressBar.increment(1, { payload: chalk.blue(`${company.nom}`) });
+                const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.blue(`${company.nom}`)}`;
+                progressBar.increment(1, { payload: payloadString });
             } catch (error) {
-                progressBar.increment(1, { payload: chalk.red(`${company.nom} - LinkedIn Erreur`) });
+                const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.red(`${company.nom} - LinkedIn Erreur`)}`;
+                progressBar.increment(1, { payload: payloadString });
                 // On sauvegarde quand même l'échec pour ne pas réessayer
                 const finalCompany = { ...company, linkedinUrl: 'ERREUR' };
                 finalData.push(finalCompany);
