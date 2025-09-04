@@ -1,7 +1,6 @@
-// Fichier: scrapers/french_fab_scraper.js
-
 import fetch from 'node-fetch';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
+import chalk from 'chalk';
 
 /**
  * Récupère la liste de base de toutes les entreprises de l'annuaire.
@@ -12,7 +11,6 @@ async function getList() {
     const directoryUrl = 'https://www.lafrenchfab.fr/annuaire/';
     const apiUrl = 'https://www.lafrenchfab.fr/ajax-call';
 
-    // --- Étape 1 : Obtenir un jeton de sécurité (nonce/goat) valide ---
     const initialResponse = await fetch(directoryUrl);
     const pageHtml = await initialResponse.text();
     const match = pageHtml.match(/"goat":\s*"([a-f0-9]+)"/);
@@ -22,10 +20,11 @@ async function getList() {
     }
     const nonceValue = match[1];
 
-    // --- Étape 2 : Boucler les appels API pour tout récupérer ---
+    console.log("-> Récupération des entreprises...");
     let companyList = [];
     let excludedIds = [];
     let hasMorePages = true;
+    let pageNum = 1;
 
     while (hasMorePages) {
         const bodyParams = new URLSearchParams();
@@ -42,7 +41,6 @@ async function getList() {
             },
             body: bodyParams
         });
-
         const data = await apiResponse.json();
 
         if (!data.html || data.nbresults === 0) {
@@ -55,16 +53,21 @@ async function getList() {
             const companyElement = $(element);
             const id = companyElement.attr('data-id');
             excludedIds.push(id);
-
-            // On ne garde que le nom et le lien, comme demandé
             companyList.push({
                 nom: companyElement.find('.directory__title').text().trim(),
                 lien: companyElement.find('a.directory__item').attr('href'),
             });
         });
+
+        // ✨ La mise à jour sur une seule ligne ✨
+        const status = `   -> Page ${chalk.blue(pageNum)} traitée | ${chalk.green(companyList.length)} entreprises trouvées`;
+        process.stdout.write(status + '\r'); // Le '\r' déplace le curseur au début de la ligne
+
+        pageNum++;
     }
 
-    console.log(`-> getList a trouvé ${companyList.length} entreprises.`);
+    process.stdout.write('\n'); // On fait un saut de ligne final
+    console.log(`\n-> getList a terminé. ${companyList.length} entreprises trouvées.`);
     return companyList;
 }
 

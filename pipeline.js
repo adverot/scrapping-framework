@@ -1,6 +1,6 @@
-// Fichier: pipeline.js
-
 import { getStep, setStep } from './utils.js';
+import cliProgress from 'cli-progress';
+import chalk from 'chalk';
 
 /**
  * Étape 1 : Récupère la liste des URLs à scraper.
@@ -39,12 +39,21 @@ async function runGetDetailsStep(sourceName, scraper) {
 
     console.log(`-> Reprise du scraping. ${doneLinks.size}/${urlsToScrape.length} entreprises déjà traitées.`);
 
+    const progressBar = new cliProgress.SingleBar({
+        format: '[{bar}] {percentage}% | {value}/{total} | {payload}'
+    }, cliProgress.Presets.shades_classic);
+
+    progressBar.start(urlsToScrape.length, doneLinks.size);
+    // On initialise le payload
+    progressBar.update({ payload: "Démarrage..." });
+
     for (const item of urlsToScrape) {
         if (doneLinks.has(item.lien)) {
             continue; // On passe directement au suivant, sans rien afficher
         }
 
         try {
+            progressBar.update({ payload: `Scraping de ${chalk.cyan(item.nom)}` });
             const detailedData = await scraper.getDetails(item.lien);
 
             // On fusionne les données initiales (nom, lien) avec les détails
@@ -57,12 +66,14 @@ async function runGetDetailsStep(sourceName, scraper) {
             detailsAlreadyDone.push(completeData);
             setStep(sourceName, "details", detailsAlreadyDone); // Sauvegarde à chaque succès
 
-            console.log(`[${detailsAlreadyDone.length}/${urlsToScrape.length}] ✅ ${item.nom}`);
+            progressBar.increment();
 
         } catch (error) {
-            console.log(`[${detailsAlreadyDone.length}/${urlsToScrape.length}] ❌ ${item.nom} - Erreur: ${error.message}`);
+            progressBar.update({ payload: chalk.red(`ERREUR sur ${item.nom}`) });
+            progressBar.increment();
         }
     }
+    progressBar.stop();
     console.log("✅ Étape 2 terminée. Toutes les pages de détail ont été traitées.");
 }
 
