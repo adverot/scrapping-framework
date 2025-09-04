@@ -33,8 +33,8 @@ Votre fichier scraper **doit** contenir et exporter deux fonctions asynchrones n
     async function getList() {
       // Votre logique de scraping de la liste ici...
       return [
-        { nom: "Entreprise A", lien: "[https://example.com/a](https://example.com/a)" },
-        { nom: "Entreprise B", lien: "[https://example.com/b](https://example.com/b)" },
+        { nom: "Entreprise A", lien: "https://example.com/a" },
+        { nom: "Entreprise B", lien: "https://example.com/b" },
       ];
     }
     ```
