@@ -44,12 +44,11 @@ async function runGetDetailsStep(sourceName, scraper) {
     }, cliProgress.Presets.shades_classic);
 
     progressBar.start(urlsToScrape.length, doneLinks.size);
-    // On initialise le payload
     progressBar.update({ payload: "Démarrage..." });
 
     for (const item of urlsToScrape) {
         if (doneLinks.has(item.lien)) {
-            continue; // On passe directement au suivant, sans rien afficher
+            continue;
         }
 
         try {

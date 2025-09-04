@@ -19,10 +19,9 @@ export function getStep(sourceName, stepName) {
         }
     } catch (error) {
         console.error(`❌ Erreur lors de la lecture ou du parsing du fichier ${filePath}:`, error);
-        // En cas de fichier corrompu, on repart de zéro pour cette étape.
     }
 
-    return []; // Retourne un tableau vide si le fichier n'existe pas ou s'il y a une erreur.
+    return [];
 }
 
 /**
