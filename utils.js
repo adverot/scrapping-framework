@@ -47,3 +47,7 @@ export function setStep(sourceName, stepName, data) {
         console.error(`❌ Erreur lors de l'écriture du fichier ${filePath}:`, error);
     }
 }
+
+export function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
