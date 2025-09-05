@@ -1,23 +1,25 @@
 import fetch from 'node-fetch';
-import puppeteer from 'puppeteer';
+import puppeteer, { TimeoutError } from 'puppeteer';
 import cliProgress from 'cli-progress';
 import chalk from 'chalk';
+import path from 'path';
 import fs from 'fs';
-import { getStep, setStep, delay } from './utils.js';
+import { getStep, setStep, delay, logError } from './utils.js';
 import constants from './constants.js';
 
 /**
  * Étape 3a : Enrichit les données avec l'API SIRENE.
  * @param {string} sourceName - Le nom de la source.
+ * @param {boolean} isTestMode - Indique si on est en mode test.
  */
-async function enrichWithSirene(sourceName) {
-    let logsPath = `./data/${sourceName}-logs.txt`;
+async function enrichWithSirene(sourceName, isTestMode = false) {
     console.log(chalk.blue("\n--- DÉBUT ÉTAPE 3a: Enrichissement via API SIRENE ---"));
 
-    const companiesToEnrich = getStep(sourceName, "details");
-    const enrichedCompanies = getStep(sourceName, "enriched");
+    const companiesToEnrich = getStep(sourceName, "details", isTestMode);
+    // On récupère les données déjà enrichies pour pouvoir reprendre
+    const enrichedCompanies = getStep(sourceName, "enriched", isTestMode);
 
-    const doneNames = new Set(enrichedCompanies.map(item => item.nom));
+    const doneNames = new Set(enrichedCompanies.map(item => item.scrap_nom));
     let successCount = enrichedCompanies.length;
 
     const progressBar = new cliProgress.SingleBar(
@@ -59,6 +61,7 @@ async function enrichWithSirene(sourceName) {
                 continue;
             }
 
+            let foundOneResult = false;
             for (let d of data) {
                 const uniqueID = "ENT-" + String(++companyIdCounter).padStart(5, '0');
                 const [departement, region] = await Promise.all([
@@ -102,31 +105,35 @@ async function enrichWithSirene(sourceName) {
                         idEntreprise: uniqueID
                     }))
                 enrichedCompanies.push(finalCompany);
+                foundOneResult = true;
             }
 
-            setStep(sourceName, "enriched", enrichedCompanies);
-            successCount++;
-            const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.green(company.nom)}`;
-            progressBar.increment(1, { payload: payloadString });
+            if (foundOneResult) {
+                setStep(sourceName, "enriched", enrichedCompanies, isTestMode);
+                successCount++;
+                const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.green(company.nom)}`;
+                progressBar.increment(1, { payload: payloadString });
+            }
         } catch (error) {
-            fs.writeFileSync(logsPath, `\n${enrichedCompanies.length}/${companiesToEnrich.length}] ❌ ${company.nom} - Erreur API: ${error.message}`, { encoding: 'utf-8', flag: 'a' });
+            logError(sourceName, 'enrich:sirene', error, { nom: company.nom }, isTestMode);
             const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.red(`${company.nom} - Erreur SIRENE`)}`;
             progressBar.increment(1, { payload: payloadString });
         } finally {
             await delay(250);
         }
     }
-    console.log("✅ Étape 3a terminée. L'enrichissement SIRENE est complet.");
+    console.log("\n✅ Étape 3a terminée. L'enrichissement SIRENE est complet.");
 }
 
 /**
  * Étape 3b : Enrichit les données avec les URLs LinkedIn via Puppeteer.
  * @param {string} sourceName - Le nom de la source.
+ * @param {boolean} isTestMode - Indique si on est en mode test.
  */
-async function enrichWithLinkedIn(sourceName) {
+async function enrichWithLinkedIn(sourceName, isTestMode = false) {
     console.log("\n--- DÉBUT ÉTAPE 3b: Recherche des URLs LinkedIn ---");
-    const enrichedData = getStep(sourceName, "enriched");
-    const finalData = getStep(sourceName, "final");
+    const enrichedData = getStep(sourceName, "enriched", isTestMode);
+    let finalData = getStep(sourceName, "final", isTestMode);
     let successCount = finalData.length;
 
     const doneNames = new Set(finalData.map(item => item.scrap_nom));
@@ -135,58 +142,144 @@ async function enrichWithLinkedIn(sourceName) {
         cliProgress.Presets.shades_classic);
     progressBar.start(enrichedData.length, doneNames.size);
 
-    const browser = await puppeteer.launch({ headless: 'new' });
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1920, height: 1080 });
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    await page.setExtraHTTPHeaders({
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0'
-    });
+    let browser;
 
     try {
+        browser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        const page = await browser.newPage();
+        await page.setViewport({ width: 1920, height: 1080 });
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
         for (const company of enrichedData) {
             if (doneNames.has(company.scrap_nom)) {
                 continue;
             }
 
-            let linkedinUrl = '';
+            let selectedUrl = '';
+            let finalCompany = { ...company, linkedinUrl: '' }; // Initialiser avec une URL vide
+
             try {
-                if (company.website) {
-                    await page.goto(company.website, { waitUntil: 'domcontentloaded', timeout: 20000 });
-                    const linkedinHandle = await page.waitForSelector('a[href*="linkedin.com/company/"]', { timeout: 5000 }).catch(() => null);
-                    if (linkedinHandle) {
-                        linkedinUrl = await page.evaluate(a => a.href, linkedinHandle);
-                        successCount++;
+                let navigationSuccess = false;
+                if (company.scrap_website && company.scrap_website.startsWith('http')) {
+                    try {
+                        // Tentative 1
+                        await page.goto(company.scrap_website, { waitUntil: 'networkidle2', timeout: 5000 });
+                        navigationSuccess = true;
+                    } catch (error1) {
+                        logError(sourceName, 'enrich:linkedin_nav_attempt1', error1, { nom: company.scrap_nom, website: company.scrap_website }, isTestMode);
+                        progressBar.update({ payload: chalk.yellow(`Erreur nav sur ${company.scrap_nom}, 2nde tentative...`) });
+                        try {
+                            // Tentative 2
+                            await page.goto(company.scrap_website, { waitUntil: 'networkidle2', timeout: 10000 });
+                            navigationSuccess = true;
+                        } catch (error2) {
+                            logError(sourceName, 'enrich:linkedin_nav_attempt2', error2, { nom: company.scrap_nom, website: company.scrap_website }, isTestMode);
+                            // Si l'erreur finale n'est pas un simple timeout, on la considère comme une erreur "dure".
+                            if (!(error2 instanceof TimeoutError)) {
+                                finalCompany.linkedinUrl = 'ERREUR';
+                            }
+                        }
+                    }
+
+                    // Si la navigation a réussi, on cherche les liens
+                    if (navigationSuccess) {
+                        // 2. Récupérer TOUS les liens linkedin sur le site
+                        const allLinkedinLinks = await page.$$eval('a[href*="linkedin.com"]', links =>
+                            links.map(link => link.href)
+                        );
+
+                        // 3. Appliquer la stratégie de priorisation
+                        const companyMatches = allLinkedinLinks.filter(href => href.includes('/company/'));
+                        const otherMatches = allLinkedinLinks.filter(href => !href.includes('/company/'));
+
+                        if (companyMatches.length > 0) {
+                            selectedUrl = companyMatches[0]; // Priorité aux liens "company"
+                        } else if (otherMatches.length > 0) {
+                            selectedUrl = otherMatches[0];
+                        }
+
+                        // Si rien n'est trouvé sur le site, on lance une recherche Google
+                        if (!selectedUrl) {
+                            progressBar.update({ payload: chalk.cyan(`Recherche DDG pour ${company.scrap_nom}...`) });
+                            const ddgQuery = encodeURIComponent(`${company.scrap_nom} linkedin`);
+                            // Correction de l'URL pour utiliser le sous-domaine html.
+                            const ddgSearchUrl = `https://html.duckduckgo.com/html/?q=${ddgQuery}`;
+
+                            await page.goto(ddgSearchUrl, { waitUntil: 'networkidle2', timeout: 10000 });
+
+                            // Récupère tous les liens pertinents de la page de résultats DuckDuckGo
+                            const ddgLinks = await page.evaluate(() => {
+                                // Les résultats sont dans des div avec la classe 'result'
+                                const links = Array.from(document.querySelectorAll('.results .result__a[href*="linkedin.com"]'));
+                                return links.map(a => a.href);
+                            });
+
+                            // DuckDuckGo HTML version uses redirect links. We need to parse them.
+                            const cleanedLinks = ddgLinks.map(link => {
+                                try {
+                                    // The href can be a relative URL (starts with //), so we need a base.
+                                    const fullUrl = new URL(link, 'https://duckduckgo.com');
+                                    // The real URL is in the 'uddg' parameter
+                                    const uddgParam = fullUrl.searchParams.get('uddg');
+                                    return uddgParam || null; // Return the real URL or null if not found
+                                } catch (e) {
+                                    return null; // Ignore invalid URLs
+                                }
+                            }).filter(Boolean); // Remove nulls
+
+                            // Applique la stratégie de priorisation
+                            const companyMatches = cleanedLinks.filter(href => href.includes('/company/'));
+                            const showcaseMatches = cleanedLinks.filter(href => href.includes('/showcase/'));
+
+                            if (companyMatches.length > 0) {
+                                selectedUrl = companyMatches[0]; // Priorité 1: Page "company"
+                            } else if (showcaseMatches.length > 0) {
+                                selectedUrl = showcaseMatches[0]; // Priorité 2: Page "showcase"
+                            }
+                        }
                     }
                 }
 
-                const finalCompany = { ...company, linkedinUrl };
+                // 4. Mettre à jour l'objet et sauvegarder, même si non trouvé
+                // On assigne l'URL trouvée seulement si on n'a pas déjà marqué une erreur "dure"
+                if (finalCompany.linkedinUrl !== 'ERREUR') {
+                    finalCompany.linkedinUrl = selectedUrl;
+                }
                 finalData.push(finalCompany);
-                setStep(sourceName, "final", finalData);
-                const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.blue(`${company.nom}`)}`;
+                setStep(sourceName, "final", finalData, isTestMode);
+
+                if (selectedUrl) {
+                    successCount++;
+                }
+
+                const statusMessage = finalCompany.linkedinUrl && finalCompany.linkedinUrl !== 'ERREUR'
+                    ? chalk.blue(`${company.scrap_nom} (Trouvé)`)
+                    : chalk.gray(`${company.scrap_nom} - Non trouvé`);
+                const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${statusMessage}`;
                 progressBar.increment(1, { payload: payloadString });
+
             } catch (error) {
-                const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.red(`${company.nom} - LinkedIn Erreur`)}`;
-                progressBar.increment(1, { payload: payloadString });
-                // On sauvegarde quand même l'échec pour ne pas réessayer
-                const finalCompany = { ...company, linkedinUrl: 'ERREUR' };
+                logError(sourceName, 'enrich:linkedin', error, { nom: company.scrap_nom, website: company.scrap_website }, isTestMode);
+
+                // 5. Sauvegarder l'échec pour ne pas réessayer
+                finalCompany.linkedinUrl = 'ERREUR';
                 finalData.push(finalCompany);
-                setStep(sourceName, "final", finalData);
+                setStep(sourceName, "final", finalData, isTestMode);
+
+                const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.red(`${company.scrap_nom} - Erreur`)}`;
+                progressBar.increment(1, { payload: payloadString });
             }
         }
     } finally {
-        await browser.close();
+        progressBar.stop();
+        if (browser) {
+            await browser.close();
+        }
     }
-    console.log("✅ Étape 3b terminée. La recherche LinkedIn est complète.");
+    console.log("\n✅ Étape 3b terminée. La recherche LinkedIn est complète.");
 }
 
 

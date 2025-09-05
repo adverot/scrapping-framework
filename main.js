@@ -1,5 +1,7 @@
 // Fichier: main.js
 
+import fs from 'fs';
+import path from 'path';
 import pipeline from './pipeline.js';
 import enrich from './enrich.js';
 
@@ -7,8 +9,38 @@ import enrich from './enrich.js';
  * Fonction principale qui orchestre l'ensemble du pipeline de scraping.
  */
 async function main() {
-    // 1. Récupérer le nom de la source depuis les arguments de la ligne de commande
-    const sourceName = process.argv[2];
+    // 1. Récupérer les arguments de la ligne de commande
+    // On ignore le premier argument si c'est '--' (ajouté par npm)
+    let args = process.argv.slice(2);
+    if (args[0] === '--') args = args.slice(1);
+
+    // Le premier argument est le nom de la source.
+    const sourceName = args[0];
+    // Le deuxième argument (optionnel) est le mode ('test').
+    const isTestMode = args[1] === 'test';
+
+    if (isTestMode) {
+        console.log("🧪 Mode test activé.");
+        console.log("-> Nettoyage des anciens fichiers de test et logs...");
+        const testDir = path.join(process.cwd(), 'data', 'test');
+        try {
+            if (fs.existsSync(testDir)) {
+                const files = fs.readdirSync(testDir);
+                // Supprime les fichiers de données de test
+                files
+                    .filter(file => file.startsWith(`${sourceName}-`) && file.endsWith('.test.json'))
+                    .forEach(file => fs.unlinkSync(path.join(testDir, file)));
+                // Supprime le fichier de log de test
+                const logFilePath = path.join(testDir, `errors-${sourceName}.log`);
+                if (fs.existsSync(logFilePath)) {
+                    fs.unlinkSync(logFilePath);
+                }
+            }
+            console.log("-> Nettoyage terminé.");
+        } catch (err) {
+            console.error("❌ Erreur lors du nettoyage des fichiers de test:", err);
+        }
+    }
 
     // 2. Vérifier si un nom de source a été fourni
     if (!sourceName) {
@@ -27,16 +59,16 @@ async function main() {
 
         // 4. Lancer le pipeline avec la configuration dynamique
         // Étape 1 : Récupère la liste des URLs
-        await pipeline.runGetListStep(sourceName, scraper);
+        await pipeline.runGetListStep(sourceName, scraper, isTestMode);
 
         // Étape 2 : Scrape les détails de chaque page
-        await pipeline.runGetDetailsStep(sourceName, scraper);
+        await pipeline.runGetDetailsStep(sourceName, scraper, isTestMode);
 
         // Étape 3a : Enrichit avec l'API SIRENE
-        await enrich.enrichWithSirene(sourceName);
+        await enrich.enrichWithSirene(sourceName, isTestMode);
 
         // Étape 3b : Enrichit avec les URLs LinkedIn
-        await enrich.enrichWithLinkedIn(sourceName);
+        await enrich.enrichWithLinkedIn(sourceName, isTestMode);
 
         console.log(`\n\n--- ✅ PIPELINE TERMINÉ AVEC SUCCÈS POUR LA SOURCE : ${sourceName} ---\n`);
 

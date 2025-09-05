@@ -2,11 +2,14 @@ import fetch from 'node-fetch';
 import * as cheerio from 'cheerio';
 import chalk from 'chalk';
 
+const TEST_MODE_LIMIT = 20; // Limite le nombre d'éléments à scraper en mode test
+
 /**
  * Récupère la liste de base de toutes les entreprises de l'annuaire.
+ * @param {boolean} [isTestMode=false] - Si true, retourne un jeu de données limité.
  * @returns {Promise<Array<{nom: string, lien: string}>>}
  */
-async function getList() {
+async function getList(isTestMode = false) {
     console.log("-> Démarrage de getList pour French Fab...");
     const directoryUrl = 'https://www.lafrenchfab.fr/annuaire/';
     const apiUrl = 'https://www.lafrenchfab.fr/ajax-call';
@@ -58,6 +61,11 @@ async function getList() {
                 lien: companyElement.find('a.directory__item').attr('href'),
             });
         });
+
+        // Si on est en mode test et qu'on a atteint la limite, on arrête.
+        if (isTestMode && companyList.length >= TEST_MODE_LIMIT) {
+            hasMorePages = false;
+        }
 
         // ✨ La mise à jour sur une seule ligne ✨
         const status = `   -> Page ${chalk.blue(pageNum)} traitée | ${chalk.green(companyList.length)} entreprises trouvées`;

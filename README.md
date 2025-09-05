@@ -23,15 +23,18 @@ Votre fichier scraper **doit** contenir et exporter deux fonctions asynchrones n
 
 #### `async function getList()`
 
--   **Rôle :** Scraper la liste initiale de toutes les cibles (entreprises, produits, etc.) depuis l'annuaire.
+-   **Rôle :** Scraper la liste initiale de toutes les cibles (entreprises, produits, etc.).
+-   **Paramètre (optionnel) :** `isTestMode` (booléen). Si `true`, la fonction doit s'arrêter prématurément et retourner un petit sous-ensemble de données (ex: 5-10 éléments) pour accélérer les tests.
 -   **Retourne :** Une `Promise` qui se résout avec un **tableau d'objets**. Chaque objet doit contenir au minimum les clés `nom` et `lien`.
 
     ```javascript
     /**
+     * @param {boolean} [isTestMode=false] - Si true, retourne un jeu de données limité.
      * @returns {Promise<Array<{nom: string, lien: string}>>}
      */
-    async function getList() {
-      // Votre logique de scraping de la liste ici...
+    async function getList(isTestMode = false) {
+      // Votre logique de scraping de la liste ici.
+      // Pensez à limiter le nombre de résultats si isTestMode est true.
       return [
         { nom: "Entreprise A", lien: "https://example.com/a" },
         { nom: "Entreprise B", lien: "https://example.com/b" },
@@ -86,11 +89,13 @@ import cheerio from 'cheerio';
 
 /**
  * Récupère la liste de base.
+ * @param {boolean} [isTestMode=false] - Si true, retourne un jeu de données limité.
  * @returns {Promise<Array<{nom: string, lien: string}>>}
  */
-async function getList() {
+async function getList(isTestMode = false) {
   console.log("-> Lancement de getList pour la nouvelle source...");
-  // ... Logique pour scraper la liste des URLs ...
+  // ... Logique pour scraper la liste des URLs.
+  // Si isTestMode est true, arrêtez-vous après avoir trouvé quelques éléments.
   const results = [
     // { nom: "...", lien: "..." }
   ];

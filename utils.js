@@ -1,8 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 
-const dataDir = path.join(process.cwd(), 'data');
-
 /**
  * Lit et retourne les données d'une étape de scraping sauvegardée.
  * @param {string} sourceName - Le nom de la source (ex: 'french_fab').
@@ -11,7 +9,12 @@ const dataDir = path.join(process.cwd(), 'data');
  * @param {boolean} [test=false] - Indique si on est en phase de test (dataset réduits) ou non
  */
 export function getStep(sourceName, stepName, test = false) {
-    const filePath = test ? path.join(dataDir, `${sourceName}-${stepName}.test.json`) : path.join(dataDir, `${sourceName}-${stepName}.json`);
+    let filePath;
+    if (test) {
+        filePath = path.join(process.cwd(), 'data', 'test', `${sourceName}-${stepName}.test.json`);
+    } else {
+        filePath = path.join(process.cwd(), 'data', sourceName, `${stepName}.json`);
+    }
 
     try {
         if (fs.existsSync(filePath)) {
@@ -33,19 +36,62 @@ export function getStep(sourceName, stepName, test = false) {
  * @param {boolean} [test=false] - Indique si on est en phase de test (dataset réduits) ou non
  */
 export function setStep(sourceName, stepName, data, test = false) {
-    const filePath = test ? path.join(dataDir, `${sourceName}-${stepName}.test.json`) : path.join(dataDir, `${sourceName}-${stepName}.json`);
+    let filePath;
+    if (test) {
+        filePath = path.join(process.cwd(), 'data', 'test', `${sourceName}-${stepName}.test.json`);
+    } else {
+        filePath = path.join(process.cwd(), 'data', sourceName, `${stepName}.json`);
+    }
 
     try {
-        // S'assure que le dossier /data existe.
-        if (!fs.existsSync(dataDir)) {
-            fs.mkdirSync(dataDir, { recursive: true });
-        }
+        // S'assure que le dossier de destination existe.
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
         // On écrit les données dans un format lisible pour le débogage.
         const jsonContent = JSON.stringify(data, null, 2);
         fs.writeFileSync(filePath, jsonContent, 'utf-8');
     } catch (error) {
         console.error(`❌ Erreur lors de l'écriture du fichier ${filePath}:`, error);
+    }
+}
+
+/**
+ * Centralise la journalisation des erreurs dans un fichier unique.
+ * @param {string} sourceName - Le nom de la source.
+ * @param {string} stepName - Le nom de l'étape où l'erreur s'est produite.
+ * @param {Error} error - L'objet d'erreur capturé.
+ * @param {object} [context={}] - Contexte supplémentaire (ex: l'item en cours de traitement).
+ * @param {boolean} [isTestMode=false] - Indique si on est en mode test pour nommer le fichier de log.
+ */
+export function logError(sourceName, stepName, error, context = {}, isTestMode = false) {
+    let logFilePath;
+    if (isTestMode) {
+        logFilePath = path.join(process.cwd(), 'data', 'test', `errors-${sourceName}.log`);
+    } else {
+        logFilePath = path.join(process.cwd(), 'data', sourceName, `errors.log`);
+    }
+
+    const timestamp = new Date().toISOString();
+
+    const contextString = Object.keys(context).length > 0 ? ` | Contexte: ${JSON.stringify(context)}` : '';
+
+    const logMessage = `
+--- ERROR ---
+Timestamp: ${timestamp}
+Source: ${sourceName}
+Étape: ${stepName}${contextString}
+Message: ${error.message}
+Stack Trace:
+${error.stack}
+`;
+
+    try {
+        const dir = path.dirname(logFilePath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.appendFileSync(logFilePath, logMessage, 'utf-8');
+    } catch (writeError) {
+        console.error(`❌ ERREUR CRITIQUE: Impossible d'écrire dans le fichier de log ${logFilePath}:`, writeError);
     }
 }
 

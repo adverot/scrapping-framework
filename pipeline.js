@@ -1,4 +1,4 @@
-import { getStep, setStep } from './utils.js';
+import { getStep, setStep, logError } from './utils.js';
 import cliProgress from 'cli-progress';
 import chalk from 'chalk';
 
@@ -7,10 +7,11 @@ import chalk from 'chalk';
  * Ne s'exécute que si la liste n'a pas déjà été sauvegardée.
  * @param {string} sourceName - Le nom de la source (ex: 'frenchFab').
  * @param {object} scraper - Le module scraper importé, doit contenir getList().
+ * @param {boolean} isTestMode - Indique si on est en mode test.
  */
-async function runGetListStep(sourceName, scraper) {
+async function runGetListStep(sourceName, scraper, isTestMode = false) {
     console.log("--- DÉBUT ÉTAPE 1: Récupération de la liste d'URLs ---");
-    const existingUrls = getStep(sourceName, "urls");
+    const existingUrls = getStep(sourceName, "urls", isTestMode);
 
     if (existingUrls.length > 0) {
         console.log(`✅ Étape 1 déjà complétée. ${existingUrls.length} URLs trouvées.`);
@@ -18,8 +19,8 @@ async function runGetListStep(sourceName, scraper) {
     }
 
     console.log(`-> Lancement de la collecte des URLs pour ${sourceName}...`);
-    const newList = await scraper.getList();
-    setStep(sourceName, "urls", newList);
+    const newList = await scraper.getList(isTestMode);
+    setStep(sourceName, "urls", newList, isTestMode);
     console.log(`✅ Étape 1 terminée. ${newList.length} URLs sauvegardées.`);
 }
 
@@ -28,11 +29,12 @@ async function runGetListStep(sourceName, scraper) {
  * Reprend le travail là où il s'est arrêté.
  * @param {string} sourceName - Le nom de la source (ex: 'frenchFab').
  * @param {object} scraper - Le module scraper importé, doit contenir getDetails().
+ * @param {boolean} isTestMode - Indique si on est en mode test.
  */
-async function runGetDetailsStep(sourceName, scraper) {
+async function runGetDetailsStep(sourceName, scraper, isTestMode = false) {
     console.log("\n--- DÉBUT ÉTAPE 2: Scraping des pages de détail ---");
-    const urlsToScrape = getStep(sourceName, "urls");
-    const detailsAlreadyDone = getStep(sourceName, "details");
+    const urlsToScrape = getStep(sourceName, "urls", isTestMode);
+    const detailsAlreadyDone = getStep(sourceName, "details", isTestMode);
 
     // On utilise un Set pour une vérification ultra-rapide de ce qui a déjà été fait.
     const doneLinks = new Set(detailsAlreadyDone.map(item => item.lien));
@@ -63,12 +65,13 @@ async function runGetDetailsStep(sourceName, scraper) {
             };
 
             detailsAlreadyDone.push(completeData);
-            setStep(sourceName, "details", detailsAlreadyDone); // Sauvegarde à chaque succès
+            setStep(sourceName, "details", detailsAlreadyDone, isTestMode); // Sauvegarde à chaque succès
 
             progressBar.increment();
 
         } catch (error) {
             progressBar.update({ payload: chalk.red(`ERREUR sur ${item.nom}`) });
+            logError(sourceName, 'details', error, { nom: item.nom, lien: item.lien }, isTestMode);
             progressBar.increment();
         }
     }
