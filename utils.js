@@ -195,6 +195,7 @@ export async function convertToCsv(sourceName, isTestMode = false) {
             const csvDirigeants = stringify(dirigeantsData, {
                 header: true,
                 columns: [
+                    { key: 'id', header: "ID" },
                     { key: 'prenom', header: "Prénom" },
                     { key: 'nom', header: "Nom" },
                     { key: 'fonction', header: "Fonction" },
