@@ -140,7 +140,7 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
  * @param {boolean} isTestMode - Indique si on est en mode test.
  */
 async function enrichWithLinkedIn(sourceName, isTestMode = false) {
-    console.log("\n--- DÉBUT ÉTAPE 3b: Recherche des URLs LinkedIn ---");
+    console.log(chalk.blue("\n--- DÉBUT ÉTAPE 3b: Recherche des URLs LinkedIn ---"));
     const allProcessedCompanies = await getStep(sourceName, "enriched", isTestMode);
     // On ne traite que les entreprises qui ont été réellement enrichies par SIRENE.
     const companiesToEnrich = allProcessedCompanies.filter(c => c.sirene_siren);
@@ -220,7 +220,7 @@ async function enrichWithLinkedIn(sourceName, isTestMode = false) {
 
                         // Si rien n'est trouvé sur le site, on lance une recherche Google
                         if (!selectedUrl) {
-                            progressBar.update({ payload: chalk.cyan(`Recherche DDG pour ${company.scrap_nom}...`) });
+                            progressBar.update({ payload: `${chalk.green(`Trouvées: ${successCount}`) | chalk.cyan(`Recherche DDG pour ${company.scrap_nom}...`)}` });
                             const ddgQuery = encodeURIComponent(`${company.scrap_nom} linkedin`);
                             // Correction de l'URL pour utiliser le sous-domaine html.
                             const ddgSearchUrl = `https://html.duckduckgo.com/html/?q=${ddgQuery}`;

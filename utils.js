@@ -1,5 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { stringify } from 'csv-stringify/sync';
+import chalk from 'chalk';
 
 /**
  * Lit et retourne les données d'une étape de scraping sauvegardée.
@@ -15,10 +17,10 @@ export async function getStep(sourceName, stepName, test = false) {
     } else {
         filePath = path.join(process.cwd(), 'data', sourceName, `${stepName}.json`);
     }
-    
+
     try {
         // fs.access lève une erreur si le fichier n'existe pas, ce qui est géré par le catch.
-        await fs.access(filePath); 
+        await fs.access(filePath);
         const fileContent = await fs.readFile(filePath, 'utf-8');
         return JSON.parse(fileContent);
     } catch (error) {
@@ -45,12 +47,12 @@ export async function setStep(sourceName, stepName, data, test = false) {
     } else {
         filePath = path.join(process.cwd(), 'data', sourceName, `${stepName}.json`);
     }
-    
+
     try {
         // S'assure que le dossier de destination existe.
         const dir = path.dirname(filePath);
         await fs.mkdir(dir, { recursive: true });
-        
+
         // On écrit les données dans un format lisible pour le débogage.
         const jsonContent = JSON.stringify(data, null, 2);
         await fs.writeFile(filePath, jsonContent, 'utf-8');
@@ -100,4 +102,113 @@ ${error.stack}
 
 export function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Convertit les données du fichier final.json en deux fichiers CSV (entreprises et dirigeants).
+ * @param {string} sourceName - Le nom de la source (ex: 'french_fab').
+ * @param {boolean} [isTestMode=false] - Indique si on est en mode test.
+ */
+export async function convertToCsv(sourceName, isTestMode = false) {
+    console.log(chalk.blue("🔄 Conversion des données finales en CSV..."));
+
+    const finalData = await getStep(sourceName, 'final', isTestMode);
+    if (!finalData || finalData.length === 0) {
+        console.log(chalk.yellow("Aucune donnée finale à convertir."));
+        return;
+    }
+
+    // Définir le dossier de sortie en fonction du mode (test ou prod)
+    const outputDir = path.join(process.cwd(), 'data', isTestMode ? 'test' : sourceName);
+
+    // --- 1. Préparation des données pour les entreprises ---
+    const companiesData = finalData.map(company => ({
+        recordId: company.id ?? '',
+        nom: company.scrap_nom ?? '',
+        description: company.scrap_description ?? '',
+        domaine: company.domain ?? '',
+        website: company.scrap_website ?? '',
+        linkedin: company.linkedinUrl !== 'ERREUR' ? company.linkedinUrl : '',
+        telephone: company.scrap_telephone ?? '',
+        ville: company.scrap_ville ?? company.sirene_ville ?? '',
+        region: company.sirene_region ?? '',
+        siren: company.sirene_siren ?? '',
+        activite: company.sirene_activite ?? '',
+        ca: company.sirene_ca ?? '',
+        annee_ca: company.sirene_annee_ca ?? '',
+        effectifs: company.sirene_effectifs ?? '',
+        annee_effectifs: company.sirene_annee_effectifs ?? '',
+        sirene_region: company.sirene_region ?? '',
+        sirene_dep_code: company.siren_departement_code ?? '',
+        sirene_dep_nom: company.sirene_departement ?? '',
+        sirene_ville: company.sirene_ville ?? '',
+        sirene_adresse: company.sirene_adresse ?? '',
+        source: '' // Laissé vide comme demandé
+    }));
+
+    // --- 2. Préparation des données pour les dirigeants ---
+    const dirigeantsData = finalData.flatMap(company =>
+        (company.dirigeants || []).map(dirigeant => ({
+            ...dirigeant,
+            fonction: dirigeant.fonction === 'null' ? '' : dirigeant.fonction // Nettoyage
+        }))
+    );
+
+    // --- 3. Génération du CSV des entreprises ---
+    try {
+        const csvEntreprises = stringify(companiesData, {
+            header: true,
+            columns: [
+                { key: 'recordId', header: 'Record ID Externe Entreprise' },
+                { key: 'nom', header: 'Nom de l\'entreprise' },
+                { key: 'description', header: 'Description' },
+                { key: 'domaine', header: 'Nom de domaine de l\'entreprise' },
+                { key: 'website', header: 'URL du site web' },
+                { key: 'linkedin', header: 'Page d\'entreprise LinkedIn' },
+                { key: 'telephone', header: 'Numéro de téléphone' },
+                { key: 'ville', header: 'Ville' },
+                { key: 'region', header: 'État/Région' },
+                { key: 'siren', header: 'SIREN' },
+                { key: 'activite', header: 'SIRENE - Division activité' },
+                { key: 'ca', header: 'SIRENE - CA unité légale' },
+                { key: 'annee_ca', header: 'SIRENE - Année CA unité légale' },
+                { key: 'effectifs', header: 'SIRENE - Tranche effectifs unité légale' },
+                { key: 'annee_effectifs', header: 'SIRENE - Année effectifs unité légales' },
+                { key: 'sirene_region', header: 'SIRENE - Région' },
+                { key: 'sirene_dep_code', header: 'SIRENE - Dep' },
+                { key: 'sirene_dep_nom', header: 'SIRENE - Département' },
+                { key: 'sirene_ville', header: 'SIRENE - Ville' },
+                { key: 'sirene_adresse', header: 'SIRENE - Adresse postale siège' },
+                { key: 'source', header: 'Source Scraping Entreprise' }
+            ]
+        });
+        const outputPath = path.join(outputDir, `entreprises${isTestMode ? '.test' : ''}.csv`);
+        await fs.writeFile(outputPath, csvEntreprises, 'utf-8');
+        console.log(chalk.green(`✅ Fichier entreprises.csv généré avec succès : ${outputPath}`));
+    } catch (error) {
+        console.error(chalk.red("❌ Erreur lors de la génération du CSV des entreprises:"), error);
+    }
+
+    // --- 4. Génération du CSV des dirigeants ---
+    if (dirigeantsData.length > 0) {
+        try {
+            const csvDirigeants = stringify(dirigeantsData, {
+                header: true,
+                columns: [
+                    { key: 'prenom', header: "Prénom" },
+                    { key: 'nom', header: "Nom" },
+                    { key: 'fonction', header: "Fonction" },
+                    { key: 'entreprise', header: "Entreprise" },
+                    { key: 'idEntreprise', header: "ID Entreprise" },
+                ]
+            });
+            const outputPath = path.join(outputDir, `dirigeants${isTestMode ? '.test' : ''}.csv`);
+            await fs.writeFile(outputPath, csvDirigeants, 'utf-8');
+            console.log(chalk.green(`✅ Fichier dirigeants.csv généré avec succès : ${outputPath}`));
+        } catch (error) {
+            console.error(chalk.red("❌ Erreur lors de la génération du CSV des dirigeants:"), error);
+        }
+    } else {
+        console.log(chalk.yellow("🟡 Aucun dirigeant trouvé, le fichier dirigeants.csv n'a pas été créé."));
+    }
 }

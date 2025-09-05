@@ -10,7 +10,7 @@ import chalk from 'chalk';
  * @param {boolean} isTestMode - Indique si on est en mode test.
  */
 async function runGetListStep(sourceName, scraper, isTestMode = false) {
-    console.log("--- DÉBUT ÉTAPE 1: Récupération de la liste d'URLs ---");
+    console.log(chalk.blue("--- DÉBUT ÉTAPE 1: Récupération de la liste d'URLs ---"));
     const existingUrls = await getStep(sourceName, "urls", isTestMode);
 
     if (existingUrls.length > 0) {
@@ -32,7 +32,7 @@ async function runGetListStep(sourceName, scraper, isTestMode = false) {
  * @param {boolean} isTestMode - Indique si on est en mode test.
  */
 async function runGetDetailsStep(sourceName, scraper, isTestMode = false) {
-    console.log("\n--- DÉBUT ÉTAPE 2: Scraping des pages de détail ---");
+    console.log(chalk.blue("\n--- DÉBUT ÉTAPE 2: Scraping des pages de détail ---"));
     const urlsToScrape = await getStep(sourceName, "urls", isTestMode);
     const detailsAlreadyDone = await getStep(sourceName, "details", isTestMode);
 

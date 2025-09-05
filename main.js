@@ -1,9 +1,9 @@
-// Fichier: main.js
-
 import fs from 'fs/promises';
 import path from 'path';
 import pipeline from './pipeline.js';
 import enrich from './enrich.js';
+import chalk from 'chalk';
+import { convertToCsv } from './utils.js';
 
 /**
  * Fonction principale qui orchestre l'ensemble du pipeline de scraping.
@@ -52,7 +52,7 @@ async function main() {
         process.exit(1); // Arrête le script avec un code d'erreur
     }
 
-    console.log(`\n\n--- 🚀 DÉMARRAGE DU PIPELINE COMPLET POUR LA SOURCE : ${sourceName} ---\n`);
+    console.log(chalk.bgBlueBright.black(`\n\n--- 🚀 DÉMARRAGE DU PIPELINE COMPLET POUR LA SOURCE : ${sourceName} ---\n`));
 
     try {
         // 3. Importer dynamiquement le module scraper correspondant
@@ -73,20 +73,34 @@ async function main() {
         // Étape 3b : Enrichit avec les URLs LinkedIn
         await enrich.enrichWithLinkedIn(sourceName, isTestMode);
 
-        console.log(`\n\n--- ✅ PIPELINE TERMINÉ AVEC SUCCÈS POUR LA SOURCE : ${sourceName} ---\n`);
+        // Étape 4 : Convertit les données finales en fichiers CSV
+        await convertToCsv(sourceName, isTestMode);
+
+        console.log(chalk.bgBlueBright.black(`\n\n--- ✅ PIPELINE TERMINÉ AVEC SUCCÈS POUR LA SOURCE : ${sourceName} ---\n`));
 
     } catch (error) {
         if (error.code === 'ERR_MODULE_NOT_FOUND') {
-            console.error(`\n\n--- ❌ ERREUR CRITIQUE ---`);
+            console.error(chalk.red.bold(`\n\n--- ❌ ERREUR CRITIQUE ---`));
             console.error(`Le scraper pour la source "${sourceName}" n'a pas été trouvé.`);
             console.error(`Veuillez vérifier qu'un fichier nommé "${sourceName}.js" existe bien dans le dossier "/scrapers".`);
         } else {
-            console.error("\n\n--- ❌ UNE ERREUR CRITIQUE A ARRÊTÉ LE PIPELINE ---");
+            console.error(chalk.red.bold("\n\n--- ❌ UNE ERREUR CRITIQUE A ARRÊTÉ LE PIPELINE ---"));
             console.error(error);
         }
         process.exit(1);
     }
 }
 
-// Lancement du script
 main();
+
+// --- PISTES D'AMÉLIORATION FUTURES ---
+
+// TODO - Parallélisation: Intégrer une librairie comme 'p-limit' pour paralléliser les étapes longues (ex: runGetDetailsStep, enrichWithLinkedIn) afin d'accélérer le traitement des grosses sources.
+
+// TODO - Gestion des Proxies: Ajouter un système de rotation de proxies (via un service externe) dans les requêtes fetch et Puppeteer pour éviter les blocages d'IP lors de scraping à grande échelle.
+
+// TODO - Gestion des CAPTCHAs: Implémenter une solution de résolution de CAPTCHA (ex: 2Captcha, Anti-Captcha) pour gérer les blocages sur les sites qui en présentent (notamment Google/DuckDuckGo lors de la recherche LinkedIn).
+
+// TODO - Intégration Google Sheets: Créer une interface via Google Apps Script pour piloter le pipeline depuis une feuille de calcul. Cela impliquerait probablement de transformer ce script en une API ou un service cloud (ex: Google Cloud Function) que le Google Sheet pourrait appeler pour lancer les tâches et récupérer les résultats.
+
+// TODO - Sécurité: Si des clés d'API ou des identifiants sont ajoutés à l'avenir, les déplacer dans un fichier .env et utiliser une librairie comme 'dotenv' pour les charger, au lieu de les coder en dur.
