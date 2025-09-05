@@ -2,8 +2,6 @@ import fetch from 'node-fetch';
 import puppeteer, { TimeoutError } from 'puppeteer';
 import cliProgress from 'cli-progress';
 import chalk from 'chalk';
-import path from 'path';
-import fs from 'fs';
 import { getStep, setStep, delay, logError } from './utils.js';
 import constants from './constants.js';
 
@@ -16,11 +14,10 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
     console.log(chalk.blue("\n--- DÉBUT ÉTAPE 3a: Enrichissement via API SIRENE ---"));
 
     const companiesToEnrich = getStep(sourceName, "details", isTestMode);
-    // On récupère les données déjà enrichies pour pouvoir reprendre
-    const enrichedCompanies = getStep(sourceName, "enriched", isTestMode);
+    let enrichedCompanies = getStep(sourceName, "enriched", isTestMode);
 
     const doneNames = new Set(enrichedCompanies.map(item => item.scrap_nom));
-    let successCount = enrichedCompanies.length;
+    let successCount = enrichedCompanies.filter(c => c.sirene_siren).length;
 
     const progressBar = new cliProgress.SingleBar(
         { format: '{bar} {percentage}% | {value}/{total} | {payload}' },
@@ -29,12 +26,13 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
 
     let companyIdCounter = enrichedCompanies.length;
     let dirigeantsIdCounter = enrichedCompanies.reduce((acc, company) => acc + (company.dirigeants?.length || 0), 0);
-    ;
 
     for (const company of companiesToEnrich) {
         if (doneNames.has(company.nom)) {
             continue;
         }
+
+        let companyAdded = false;
 
         try {
             if (!company.codePostal) {
@@ -58,7 +56,6 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
             if (!data || data.length === 0) {
                 const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.yellow(`${company.nom} - Aucune entreprise trouvée`)}`;
                 progressBar.increment(1, { payload: payloadString });
-                continue;
             }
 
             let foundOneResult = false;
@@ -110,18 +107,37 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
 
             if (foundOneResult) {
                 setStep(sourceName, "enriched", enrichedCompanies, isTestMode);
+                companyAdded = true;
                 successCount++;
                 const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.green(company.nom)}`;
                 progressBar.increment(1, { payload: payloadString });
             }
+
         } catch (error) {
             logError(sourceName, 'enrich:sirene', error, { nom: company.nom }, isTestMode);
             const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.red(`${company.nom} - Erreur SIRENE`)}`;
             progressBar.increment(1, { payload: payloadString });
         } finally {
+            // Si l'entreprise n'a pas été ajoutée (pas de résultat ou erreur),
+            // on ajoute un placeholder pour la marquer comme "traitée".
+            if (!companyAdded) {
+                const placeholder = {};
+                // On copie les données de scraping
+                for (const [key, value] of Object.entries(company)) {
+                    placeholder[`scrap_${key}`] = value;
+                }
+                // On ajoute des champs SIRENE vides pour la cohérence
+                placeholder.sirene_siren = null;
+                placeholder.dirigeants = [];
+                enrichedCompanies.push(placeholder);
+                progressBar.increment();
+            }
+            // On sauvegarde l'état à chaque itération pour une reprise fiable.
+            setStep(sourceName, "enriched", enrichedCompanies, isTestMode);
             await delay(250);
         }
     }
+    progressBar.stop();
     console.log("\n✅ Étape 3a terminée. L'enrichissement SIRENE est complet.");
 }
 
@@ -132,7 +148,10 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
  */
 async function enrichWithLinkedIn(sourceName, isTestMode = false) {
     console.log("\n--- DÉBUT ÉTAPE 3b: Recherche des URLs LinkedIn ---");
-    const enrichedData = getStep(sourceName, "enriched", isTestMode);
+    const allProcessedCompanies = getStep(sourceName, "enriched", isTestMode);
+    // On ne traite que les entreprises qui ont été réellement enrichies par SIRENE.
+    const companiesToEnrich = allProcessedCompanies.filter(c => c.sirene_siren);
+
     let finalData = getStep(sourceName, "final", isTestMode);
     let successCount = finalData.length;
 
@@ -140,7 +159,7 @@ async function enrichWithLinkedIn(sourceName, isTestMode = false) {
     const progressBar = new cliProgress.SingleBar(
         { format: '{bar} {percentage}% | {value}/{total} | {payload}' },
         cliProgress.Presets.shades_classic);
-    progressBar.start(enrichedData.length, doneNames.size);
+    progressBar.start(companiesToEnrich.length, doneNames.size);
 
     let browser;
 
@@ -153,7 +172,7 @@ async function enrichWithLinkedIn(sourceName, isTestMode = false) {
         await page.setViewport({ width: 1920, height: 1080 });
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-        for (const company of enrichedData) {
+        for (const company of companiesToEnrich) {
             if (doneNames.has(company.scrap_nom)) {
                 continue;
             }
