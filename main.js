@@ -1,6 +1,6 @@
 // Fichier: main.js
 
-import fs from 'fs';
+import fs from 'fs/promises';
 import path from 'path';
 import pipeline from './pipeline.js';
 import enrich from './enrich.js';
@@ -24,21 +24,24 @@ async function main() {
         console.log("-> Nettoyage des anciens fichiers de test et logs...");
         const testDir = path.join(process.cwd(), 'data', 'test');
         try {
-            if (fs.existsSync(testDir)) {
-                const files = fs.readdirSync(testDir);
-                // Supprime les fichiers de données de test
-                files
-                    .filter(file => file.startsWith(`${sourceName}-`) && file.endsWith('.test.json'))
-                    .forEach(file => fs.unlinkSync(path.join(testDir, file)));
-                // Supprime le fichier de log de test
-                const logFilePath = path.join(testDir, `errors-${sourceName}.log`);
-                if (fs.existsSync(logFilePath)) {
-                    fs.unlinkSync(logFilePath);
+            // Tente de lire le contenu du dossier. S'il n'existe pas, l'erreur est capturée.
+            const files = await fs.readdir(testDir);
+            const unlinkPromises = [];
+            for (const file of files) {
+                // Supprime les fichiers de données et de log de test
+                if ((file.startsWith(`${sourceName}-`) && file.endsWith('.test.json')) || file === `errors-${sourceName}.log`) {
+                    unlinkPromises.push(fs.unlink(path.join(testDir, file)));
                 }
+            }
+            if (unlinkPromises.length > 0) {
+                await Promise.all(unlinkPromises);
             }
             console.log("-> Nettoyage terminé.");
         } catch (err) {
-            console.error("❌ Erreur lors du nettoyage des fichiers de test:", err);
+            // Si le dossier n'existe pas (ENOENT), on ignore l'erreur. Sinon, on l'affiche.
+            if (err.code !== 'ENOENT') {
+                console.error("❌ Erreur lors du nettoyage des fichiers de test:", err);
+            }
         }
     }
 

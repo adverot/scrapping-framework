@@ -11,7 +11,7 @@ import chalk from 'chalk';
  */
 async function runGetListStep(sourceName, scraper, isTestMode = false) {
     console.log("--- DÉBUT ÉTAPE 1: Récupération de la liste d'URLs ---");
-    const existingUrls = getStep(sourceName, "urls", isTestMode);
+    const existingUrls = await getStep(sourceName, "urls", isTestMode);
 
     if (existingUrls.length > 0) {
         console.log(`✅ Étape 1 déjà complétée. ${existingUrls.length} URLs trouvées.`);
@@ -20,7 +20,7 @@ async function runGetListStep(sourceName, scraper, isTestMode = false) {
 
     console.log(`-> Lancement de la collecte des URLs pour ${sourceName}...`);
     const newList = await scraper.getList(isTestMode);
-    setStep(sourceName, "urls", newList, isTestMode);
+    await setStep(sourceName, "urls", newList, isTestMode);
     console.log(`✅ Étape 1 terminée. ${newList.length} URLs sauvegardées.`);
 }
 
@@ -33,8 +33,8 @@ async function runGetListStep(sourceName, scraper, isTestMode = false) {
  */
 async function runGetDetailsStep(sourceName, scraper, isTestMode = false) {
     console.log("\n--- DÉBUT ÉTAPE 2: Scraping des pages de détail ---");
-    const urlsToScrape = getStep(sourceName, "urls", isTestMode);
-    const detailsAlreadyDone = getStep(sourceName, "details", isTestMode);
+    const urlsToScrape = await getStep(sourceName, "urls", isTestMode);
+    const detailsAlreadyDone = await getStep(sourceName, "details", isTestMode);
 
     // On utilise un Set pour une vérification ultra-rapide de ce qui a déjà été fait.
     const doneLinks = new Set(detailsAlreadyDone.map(item => item.lien));
@@ -65,13 +65,13 @@ async function runGetDetailsStep(sourceName, scraper, isTestMode = false) {
             };
 
             detailsAlreadyDone.push(completeData);
-            setStep(sourceName, "details", detailsAlreadyDone, isTestMode); // Sauvegarde à chaque succès
+            await setStep(sourceName, "details", detailsAlreadyDone, isTestMode); // Sauvegarde à chaque succès
 
             progressBar.increment();
 
         } catch (error) {
             progressBar.update({ payload: chalk.red(`ERREUR sur ${item.nom}`) });
-            logError(sourceName, 'details', error, { nom: item.nom, lien: item.lien }, isTestMode);
+            await logError(sourceName, 'details', error, { nom: item.nom, lien: item.lien }, isTestMode);
             progressBar.increment();
         }
     }

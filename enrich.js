@@ -13,8 +13,8 @@ import constants from './constants.js';
 async function enrichWithSirene(sourceName, isTestMode = false) {
     console.log(chalk.blue("\n--- DÉBUT ÉTAPE 3a: Enrichissement via API SIRENE ---"));
 
-    const companiesToEnrich = getStep(sourceName, "details", isTestMode);
-    let enrichedCompanies = getStep(sourceName, "enriched", isTestMode);
+    const companiesToEnrich = await getStep(sourceName, "details", isTestMode);
+    let enrichedCompanies = await getStep(sourceName, "enriched", isTestMode);
 
     const doneNames = new Set(enrichedCompanies.map(item => item.scrap_nom));
     let successCount = enrichedCompanies.filter(c => c.sirene_siren).length;
@@ -32,12 +32,11 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
             continue;
         }
 
-        let companyAdded = false;
+        let foundOneResult = false;
 
         try {
             if (!company.codePostal) {
-                const payloadString = `Trouvées: ${chalk.green(successCount)} | ${chalk.yellow(`${company.nom} - Ignorée (pas de CP)`)}`;
-                progressBar.increment(1, { payload: payloadString });
+                // On ne fait rien, le placeholder sera ajouté dans le `finally`
                 continue;
             }
 
@@ -53,12 +52,6 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
             const rawData = await response.json();
             const data = rawData.results.filter(d => d.nom_complet.includes(company.nom) || d.nom_raison_sociale.includes(company.nom));
 
-            if (!data || data.length === 0) {
-                const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.yellow(`${company.nom} - Aucune entreprise trouvée`)}`;
-                progressBar.increment(1, { payload: payloadString });
-            }
-
-            let foundOneResult = false;
             for (let d of data) {
                 const uniqueID = "ENT-" + String(++companyIdCounter).padStart(5, '0');
                 const [departement, region] = await Promise.all([
@@ -106,34 +99,33 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
             }
 
             if (foundOneResult) {
-                setStep(sourceName, "enriched", enrichedCompanies, isTestMode);
-                companyAdded = true;
                 successCount++;
                 const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.green(company.nom)}`;
+                progressBar.increment(1, { payload: payloadString });
+            } else {
+                const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.yellow(`${company.nom} - Aucune entreprise trouvée`)}`;
                 progressBar.increment(1, { payload: payloadString });
             }
 
         } catch (error) {
-            logError(sourceName, 'enrich:sirene', error, { nom: company.nom }, isTestMode);
+            await logError(sourceName, 'enrich:sirene', error, { nom: company.nom }, isTestMode);
             const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.red(`${company.nom} - Erreur SIRENE`)}`;
             progressBar.increment(1, { payload: payloadString });
         } finally {
             // Si l'entreprise n'a pas été ajoutée (pas de résultat ou erreur),
             // on ajoute un placeholder pour la marquer comme "traitée".
-            if (!companyAdded) {
+            if (!foundOneResult) {
                 const placeholder = {};
                 // On copie les données de scraping
                 for (const [key, value] of Object.entries(company)) {
                     placeholder[`scrap_${key}`] = value;
                 }
-                // On ajoute des champs SIRENE vides pour la cohérence
                 placeholder.sirene_siren = null;
                 placeholder.dirigeants = [];
                 enrichedCompanies.push(placeholder);
-                progressBar.increment();
             }
             // On sauvegarde l'état à chaque itération pour une reprise fiable.
-            setStep(sourceName, "enriched", enrichedCompanies, isTestMode);
+            await setStep(sourceName, "enriched", enrichedCompanies, isTestMode);
             await delay(250);
         }
     }
@@ -148,11 +140,11 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
  */
 async function enrichWithLinkedIn(sourceName, isTestMode = false) {
     console.log("\n--- DÉBUT ÉTAPE 3b: Recherche des URLs LinkedIn ---");
-    const allProcessedCompanies = getStep(sourceName, "enriched", isTestMode);
+    const allProcessedCompanies = await getStep(sourceName, "enriched", isTestMode);
     // On ne traite que les entreprises qui ont été réellement enrichies par SIRENE.
     const companiesToEnrich = allProcessedCompanies.filter(c => c.sirene_siren);
 
-    let finalData = getStep(sourceName, "final", isTestMode);
+    let finalData = await getStep(sourceName, "final", isTestMode);
     let successCount = finalData.length;
 
     const doneNames = new Set(finalData.map(item => item.scrap_nom));
@@ -188,14 +180,14 @@ async function enrichWithLinkedIn(sourceName, isTestMode = false) {
                         await page.goto(company.scrap_website, { waitUntil: 'networkidle2', timeout: 5000 });
                         navigationSuccess = true;
                     } catch (error1) {
-                        logError(sourceName, 'enrich:linkedin_nav_attempt1', error1, { nom: company.scrap_nom, website: company.scrap_website }, isTestMode);
+                        await logError(sourceName, 'enrich:linkedin_nav_attempt1', error1, { nom: company.scrap_nom, website: company.scrap_website }, isTestMode);
                         progressBar.update({ payload: chalk.yellow(`Erreur nav sur ${company.scrap_nom}, 2nde tentative...`) });
                         try {
                             // Tentative 2
                             await page.goto(company.scrap_website, { waitUntil: 'networkidle2', timeout: 10000 });
                             navigationSuccess = true;
                         } catch (error2) {
-                            logError(sourceName, 'enrich:linkedin_nav_attempt2', error2, { nom: company.scrap_nom, website: company.scrap_website }, isTestMode);
+                            await logError(sourceName, 'enrich:linkedin_nav_attempt2', error2, { nom: company.scrap_nom, website: company.scrap_website }, isTestMode);
                             // Si l'erreur finale n'est pas un simple timeout, on la considère comme une erreur "dure".
                             if (!(error2 instanceof TimeoutError)) {
                                 finalCompany.linkedinUrl = 'ERREUR';
@@ -268,7 +260,7 @@ async function enrichWithLinkedIn(sourceName, isTestMode = false) {
                     finalCompany.linkedinUrl = selectedUrl;
                 }
                 finalData.push(finalCompany);
-                setStep(sourceName, "final", finalData, isTestMode);
+                await setStep(sourceName, "final", finalData, isTestMode);
 
                 if (selectedUrl) {
                     successCount++;
@@ -281,12 +273,12 @@ async function enrichWithLinkedIn(sourceName, isTestMode = false) {
                 progressBar.increment(1, { payload: payloadString });
 
             } catch (error) {
-                logError(sourceName, 'enrich:linkedin', error, { nom: company.scrap_nom, website: company.scrap_website }, isTestMode);
+                await logError(sourceName, 'enrich:linkedin', error, { nom: company.scrap_nom, website: company.scrap_website }, isTestMode);
 
                 // 5. Sauvegarder l'échec pour ne pas réessayer
                 finalCompany.linkedinUrl = 'ERREUR';
                 finalData.push(finalCompany);
-                setStep(sourceName, "final", finalData, isTestMode);
+                await setStep(sourceName, "final", finalData, isTestMode);
 
                 const payloadString = `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.red(`${company.scrap_nom} - Erreur`)}`;
                 progressBar.increment(1, { payload: payloadString });
