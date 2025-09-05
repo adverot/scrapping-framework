@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import puppeteer, { TimeoutError } from 'puppeteer';
+import path from 'path';
 import cliProgress from 'cli-progress';
 import chalk from 'chalk';
 import { getStep, setStep, delay, logError } from './utils.js';
@@ -156,7 +157,12 @@ async function enrichWithLinkedIn(sourceName, isTestMode = false) {
     let browser;
 
     try {
+        // On force Puppeteer à utiliser un dossier de cache stable pour éviter les problèmes de pare-feu
+        // à chaque mise à jour.
+        const puppeteerCacheDir = path.join(process.cwd(), '.puppeteer_cache');
+
         browser = await puppeteer.launch({
+            cacheDirectory: puppeteerCacheDir,
             headless: 'new',
             args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
