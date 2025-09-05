@@ -139,7 +139,7 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
  * @param {string} sourceName - Le nom de la source.
  * @param {boolean} isTestMode - Indique si on est en mode test.
  */
-async function enrichWithLinkedIn(sourceName, isTestMode = false) {
+async function enrichWithLinkedIn(sourceName, isTestMode = false) { // eslint-disable-line no-unused-vars
     console.log(chalk.blue("\n--- DÉBUT ÉTAPE 3b: Recherche des URLs LinkedIn ---"));
     const allProcessedCompanies = await getStep(sourceName, "enriched", isTestMode);
     // On ne traite que les entreprises qui ont été réellement enrichies par SIRENE.
@@ -198,6 +198,9 @@ async function enrichWithLinkedIn(sourceName, isTestMode = false) {
                             if (!(error2 instanceof TimeoutError)) {
                                 finalCompany.linkedinUrl = 'ERREUR';
                             }
+                            // Les deux tentatives ont échoué, on passe à DuckDuckGo
+                            progressBar.update({ payload: `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.cyan(`Site inaccessible, recherche DDG pour ${company.scrap_nom}...`)}` });
+                            selectedUrl = await searchLinkedInOnDuckDuckGo(page, company);
                         }
                     }
 
@@ -220,42 +223,8 @@ async function enrichWithLinkedIn(sourceName, isTestMode = false) {
 
                         // Si rien n'est trouvé sur le site, on lance une recherche Google
                         if (!selectedUrl) {
-                            progressBar.update({ payload: `${chalk.green(`Trouvées: ${successCount}`) | chalk.cyan(`Recherche DDG pour ${company.scrap_nom}...`)}` });
-                            const ddgQuery = encodeURIComponent(`${company.scrap_nom} linkedin`);
-                            // Correction de l'URL pour utiliser le sous-domaine html.
-                            const ddgSearchUrl = `https://html.duckduckgo.com/html/?q=${ddgQuery}`;
-
-                            await page.goto(ddgSearchUrl, { waitUntil: 'networkidle2', timeout: 10000 });
-
-                            // Récupère tous les liens pertinents de la page de résultats DuckDuckGo
-                            const ddgLinks = await page.evaluate(() => {
-                                // Les résultats sont dans des div avec la classe 'result'
-                                const links = Array.from(document.querySelectorAll('.results .result__a[href*="linkedin.com"]'));
-                                return links.map(a => a.href);
-                            });
-
-                            // DuckDuckGo HTML version uses redirect links. We need to parse them.
-                            const cleanedLinks = ddgLinks.map(link => {
-                                try {
-                                    // The href can be a relative URL (starts with //), so we need a base.
-                                    const fullUrl = new URL(link, 'https://duckduckgo.com');
-                                    // The real URL is in the 'uddg' parameter
-                                    const uddgParam = fullUrl.searchParams.get('uddg');
-                                    return uddgParam || null; // Return the real URL or null if not found
-                                } catch (e) {
-                                    return null; // Ignore invalid URLs
-                                }
-                            }).filter(Boolean); // Remove nulls
-
-                            // Applique la stratégie de priorisation
-                            const companyMatches = cleanedLinks.filter(href => href.includes('/company/'));
-                            const showcaseMatches = cleanedLinks.filter(href => href.includes('/showcase/'));
-
-                            if (companyMatches.length > 0) {
-                                selectedUrl = companyMatches[0]; // Priorité 1: Page "company"
-                            } else if (showcaseMatches.length > 0) {
-                                selectedUrl = showcaseMatches[0]; // Priorité 2: Page "showcase"
-                            }
+                            progressBar.update({ payload: `${chalk.green(`Trouvées: ${successCount}`)} | ${chalk.cyan(`Recherche DDG pour ${company.scrap_nom}...`)}` });
+                            selectedUrl = await searchLinkedInOnDuckDuckGo(page, company);
                         }
                     }
                 }
@@ -299,5 +268,50 @@ async function enrichWithLinkedIn(sourceName, isTestMode = false) {
     console.log("\n✅ Étape 3b terminée. La recherche LinkedIn est complète.");
 }
 
+/**
+ * Effectue une recherche sur DuckDuckGo pour trouver l'URL LinkedIn d'une entreprise.
+ * @param {import('puppeteer').Page} page - L'instance de la page Puppeteer.
+ * @param {object} company - L'objet entreprise contenant scrap_nom.
+ * @returns {Promise<string>} - L'URL LinkedIn trouvée, ou une chaîne vide.
+ */
+async function searchLinkedInOnDuckDuckGo(page, company) {
+    let selectedUrl = '';
+    const ddgQuery = encodeURIComponent(`${company.scrap_nom} linkedin`);
+    const ddgSearchUrl = `https://html.duckduckgo.com/html/?q=${ddgQuery}`;
+
+    await page.goto(ddgSearchUrl, { waitUntil: 'networkidle2', timeout: 10000 });
+
+    // Récupère tous les liens pertinents de la page de résultats DuckDuckGo
+    const ddgLinks = await page.evaluate(() => {
+        const links = Array.from(document.querySelectorAll('.results .result__a[href*="linkedin.com"]'));
+        return links.map(a => a.href);
+    });
+
+    // La version HTML de DuckDuckGo utilise des liens de redirection. Nous devons les analyser.
+    const cleanedLinks = ddgLinks.map(link => {
+        try {
+            const fullUrl = new URL(link, 'https://duckduckgo.com');
+            const uddgParam = fullUrl.searchParams.get('uddg');
+            return uddgParam || null;
+        } catch (e) {
+            return null;
+        }
+    }).filter(Boolean);
+
+    // Applique la stratégie de priorisation
+    const companyMatches = cleanedLinks.filter(href => href.includes('/company/'));
+    const showcaseMatches = cleanedLinks.filter(href => href.includes('/showcase/'));
+    const otherMatches = cleanedLinks.filter(href => !href.includes('/company/') && !href.includes('/showcase/'));
+
+    if (companyMatches.length > 0) {
+        selectedUrl = companyMatches[0]; // Priorité 1: Page "company"
+    } else if (showcaseMatches.length > 0) {
+        selectedUrl = showcaseMatches[0]; // Priorité 2: Page "showcase"
+    } else if (otherMatches.length > 0) {
+        selectedUrl = otherMatches[0]; // Priorité 3: Autres pages LinkedIn
+    }
+
+    return selectedUrl;
+}
 
 export default { enrichWithSirene, enrichWithLinkedIn };
