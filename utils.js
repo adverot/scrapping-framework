@@ -147,11 +147,21 @@ export async function convertToCsv(sourceName, isTestMode = false) {
     }));
 
     // --- 2. Préparation des données pour les dirigeants ---
-    const dirigeantsData = finalData.flatMap(company =>
-        (company.dirigeants || []).map(dirigeant => ({
-            ...dirigeant,
-            fonction: dirigeant.fonction === 'null' ? '' : dirigeant.fonction // Nettoyage
-        }))
+    let dirigeantIdCounter = 0;
+    const dirigeantsData = finalData.flatMap(company => {
+        if (!company.dirigeants || company.dirigeants.length === 0) {
+            return [];
+        }
+        return company.dirigeants.map(dirigeant => ({
+            // Assure que chaque dirigeant a un ID, même ceux venant du scraper sans enrichissement SIRENE
+            id: dirigeant.id || `PER-${String(++dirigeantIdCounter).padStart(5, '0')}`,
+            prenom: dirigeant.prenom ?? '',
+            nom: dirigeant.nom ?? '',
+            fonction: (dirigeant.fonction === 'null' || !dirigeant.fonction) ? '' : dirigeant.fonction,
+            entreprise: dirigeant.entreprise || company.scrap_nom,
+            idEntreprise: dirigeant.idEntreprise || company.id || ''
+        }));
+    }
     );
 
     // --- 3. Génération du CSV des entreprises ---

@@ -85,7 +85,7 @@ Vous pouvez utiliser ce modèle comme point de départ pour tout nouveau scraper
 // Fichier: /scrapers/template_scraper.js
 
 import fetch from 'node-fetch';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 
 /**
  * Récupère la liste de base.

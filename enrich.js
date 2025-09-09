@@ -84,17 +84,41 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
                 finalCompany.sirene_annee_effectifs = d.annee_tranche_effectif_salarie ?? "";
                 finalCompany.domain = finalCompany.scrap_website?.replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0] ?? null;
                 if (!finalCompany.scrap_website || !finalCompany.scrap_nom || !finalCompany.scrap_codePostal) continue;
-                finalCompany.dirigeants = (d.dirigeants ?? [])
+
+                // Initialisation du tableau des dirigeants
+                finalCompany.dirigeants = [];
+
+                // 1. On ajoute les dirigeants de l'API SIRENE
+                const sireneDirigeants = (d.dirigeants ?? [])
                     .filter(d => d.type_dirigeant === 'personne physique')
                     .filter(d => !constants.ROLES_A_EXCLURE.includes(d.qualite))
-                    .map(d => ({
+                    .map(dirigeant => ({
                         id: "PER-" + String(++dirigeantsIdCounter).padStart(5, '0'),
-                        prenom: d.prenoms,
-                        nom: d.nom,
-                        fonction: d.qualite ?? '',
+                        prenom: dirigeant.prenoms,
+                        nom: dirigeant.nom,
+                        fonction: dirigeant.qualite ?? '',
                         entreprise: company.nom,
                         idEntreprise: uniqueID
-                    }))
+                    }));
+                finalCompany.dirigeants.push(...sireneDirigeants);
+
+                // 2. On ajoute les contacts du scraper, s'ils existent
+                if (Array.isArray(company.contacts) && company.contacts.length > 0) {
+                    const scrapedContacts = company.contacts.map(contact => {
+                        // On s'assure que les propriétés essentielles existent.
+                        const verifiedContact = {
+                            prenom: '',
+                            nom: '',
+                            fonction: '',
+                            ...contact // Les valeurs existantes écraseront les valeurs par défaut.
+                        };
+                        verifiedContact.id = "PER-" + String(++dirigeantsIdCounter).padStart(5, '0');
+                        verifiedContact.entreprise = company.nom;
+                        verifiedContact.idEntreprise = uniqueID;
+                        return verifiedContact;
+                    });
+                    finalCompany.dirigeants.push(...scrapedContacts);
+                }
                 enrichedCompanies.push(finalCompany);
                 foundOneResult = true;
             }
@@ -122,7 +146,17 @@ async function enrichWithSirene(sourceName, isTestMode = false) {
                     placeholder[`scrap_${key}`] = value;
                 }
                 placeholder.sirene_siren = null;
-                placeholder.dirigeants = [];
+                // On conserve les contacts du scraper même si l'enrichissement SIRENE échoue
+                if (Array.isArray(company.contacts) && company.contacts.length > 0) {
+                    placeholder.dirigeants = company.contacts.map(contact => {
+                        // On applique la même vérification ici
+                        const verifiedContact = { prenom: '', nom: '', fonction: '', ...contact };
+                        verifiedContact.entreprise = company.nom;
+                        return verifiedContact;
+                    });
+                } else {
+                    placeholder.dirigeants = [];
+                }
                 enrichedCompanies.push(placeholder);
             }
             // On sauvegarde l'état à chaque itération pour une reprise fiable.
